@@ -286,11 +286,11 @@ static void schedule()
 // - schedule policy
 #ifndef MLFQ
     // Choose RR
-    sched_rr(run_queue);
+    sched_rr(round_robin);
     
 #else
     // Choose MLFQ
-    sched_mlfq();
+    sched_mlfq(round_robin);
 #endif
 }
 
