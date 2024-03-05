@@ -47,41 +47,11 @@ unsigned long schedule_time[MAXTHREADS];
 unsigned long completion_time[MAXTHREADS];
 long int response_time = 0;
 long int turearound_time = 0;
-int did_init = 0;
 ucontext_t scheduler_context;
-ucontext_t current_context;
 
 // function declarations
 static void sched_rr(LinkedList *run_queue);
 
-void init() {
-    did_init = 1;
-    if (getcontext(&scheduler_context) < 0){
-		perror("getcontext");
-		exit(1);
-	}
-	
-	// Allocate space for stack
-	void *stack=malloc(STACK_SIZE);
-	
-	if (stack == NULL){
-		perror("Failed to allocate stack");
-		exit(1);
-	}
-	
-	/* Setup context that we are going to use */
-	scheduler_context.uc_link=NULL;
-	scheduler_context.uc_stack.ss_sp=stack;
-	scheduler_context.uc_stack.ss_size=STACK_SIZE;
-	scheduler_context.uc_stack.ss_flags=0;
-
-    {
-        /* data */
-    };
-    )
-
-    makecontext(&scheduler_context, &schedule);
-}
 
 /* create a new thread */
 int worker_create(worker_t *thread, pthread_attr_t *attr,
@@ -92,13 +62,8 @@ int worker_create(worker_t *thread, pthread_attr_t *attr,
     // - allocate space of stack for this thread to run
     // after everything is set, push this thread into run queue and
     // - make it ready for the execution.
-    if (did_init == 0) {
-        init();
-    }
-
     tcb *control_block = malloc(sizeof(tcb));
-    getcontext(&current_context);
-
+    
     if (control_block == NULL) {
         perror("Failed to allocate memory to tcb");
         return -1;
@@ -118,9 +83,7 @@ int worker_create(worker_t *thread, pthread_attr_t *attr,
         return -1;
     }
 
-    control_block->thread_id = thread;
-    control_block->context = current_context;
-    control_block->priority = 4;
+    control_block->thread_id = *thread;
     control_block->context.uc_link=NULL;
 	control_block->context.uc_stack.ss_sp=stack;
 	control_block->context.uc_stack.ss_size=STACK_SIZE;
@@ -130,8 +93,7 @@ int worker_create(worker_t *thread, pthread_attr_t *attr,
     control_block->thread_status = WAITING;
 
     // and now we add the thread to the queue
-    insert(round_robin, thread, control_block);
-    setcontext(&scheduler_context);
+    insert(run_queue, thread, control_block);
     
     return 0;
 }
@@ -151,7 +113,23 @@ int worker_yield()
 
     // - switch from thread context to scheduler context
     // gets the next thread that's in the queue
-    swapcontext(&currently_running->context, &scheduler_context);
+    Node* next_thread = getNext(run_queue);
+
+    // gets the tcb of that thread
+    tcb* temp = next_thread->control;
+    removeNode(run_queue, temp->thread_id);
+
+    // swaps the context, we use setcontext because we already saved context of the previous thread
+    setcontext(&temp->context);
+    yielded = 1;
+
+    // the new thread is now the running thread, so we change the status
+    temp->thread_status = RUNNING;
+
+    // we put the previous thread back in the run queue
+    insert(run_queue, currently_running->thread_id, &currently_running);
+    currently_running = temp;
+    // free(temp);
 
     return 0;
 
@@ -170,8 +148,13 @@ void worker_exit(void *value_ptr)
     currently_running->thread_status = TERMINATED;
     insert(terminated_threads, currently_running->thread_id, currently_running);
 
+    // now that this thread is terminated, we replace the currently running thread
+    Node* next_thread = getNext(run_queue);
+    removeNode(run_queue, next_thread->control->thread_id);
+    currently_running = next_thread->control;
+
     // set the context for the new thread
-    setcontext(&scheduler_context);
+    setcontext(&currently_running->context);
 
     return;
 }
@@ -181,23 +164,18 @@ int worker_join(worker_t thread, void **value_ptr)
 {
     // - wait for a specific thread to terminate
     // let's get the thread
-    tcb* the_thread = NULL;
-    while (the_thread == NULL) {
-        the_thread = findNode(terminated_threads, thread)->control;
+    tcb* the_thread = findNode(run_queue, thread)->control;
+    while (the_thread->thread_status != TERMINATED) {
         printf("waiting for thread to terminate in the worker join while loop...");
     }
 
     // - if value_ptr is provided, retrieve return value from joining thread
-    void* the_thread_value = findNode(terminated_threads, thread)->control->value;
-    if (value_ptr != NULL) {
-        *value_ptr = the_thread_value;
-    }
+    the_thread = findNode(terminated_threads, thread)->control->value;
 
     // - de-allocate any dynamic memory created by the joining thread
     free(findNode(terminated_threads, thread));
-    setcontext(&scheduler_context);
 
-    return 0;
+    return the_thread;
 
 };
 
@@ -248,7 +226,7 @@ int worker_mutex_unlock(worker_mutex_t *mutex)
     mutex->current_thread = NULL;
     mutex->locked = 0;
     //to move threads from blocked list to run queue
-    remove_from_block_list();
+    unblock_threads();
 
 
     return 0;
@@ -375,20 +353,12 @@ static void sched_mlfq(LinkedList *run_queue)
 
     }
 
-    if (RR->head != NULL){
-		sched_rr(RR);
-	}else if (mlfq_level_3->head != NULL){
-		sched_rr(mlfq_level_3);
-	}else if (mlfq_level_2->head != NULL){
-		sched_rr(mlfq_level_2);
-	}else if (mlfq_level_1->head != NULL){
-		sched_rr(mlfq_level_1);
-	}
+    
 
     return;
 }
 
-void remove_from_block_list() {
+void unblock_threads() {
 
 	//Remove each thread from blocked list and put it on run queue.
 	//Free the node in blocked list as well
@@ -401,20 +371,18 @@ void remove_from_block_list() {
 		#ifndef MLFQ
 			// Add to the RR queue
 			insert(round_robin,cur->data,cur->control);
-            
 		#else
-			int priority = cur->control->priority;
-            if(priority == 1){
-				insert(MLFQ_level_1, cur->data, cur->control);
-			}else if (priority == 2){
-				insert(MLFQ_level_2,cur->data, cur->control);
-			}else if (priority == 3){
-				insert(MLFQ_level_3,cur->data, cur->control);
-			}else{
-				insert(round_robin,cur->data, cur->control);
-			}
+			// int prior = cur->thrd->tcb_block-> priority;
 					
-				
+			// if(prior == 1){
+			// 	insert_queue(cur->thrd, mlfq_level_1);
+			// }else if (prior == 2){
+			// 	insert_queue(cur->thrd, mlfq_level_2);
+			// }else if (prior == 3){
+			// 	insert_queue(cur->thrd, mlfq_level_3);
+			// }else{
+			// 	insert_queue(cur->thrd, RR);
+			// }	
 
 		#endif
 
