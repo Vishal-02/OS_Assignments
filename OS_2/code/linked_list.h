@@ -15,7 +15,7 @@ typedef struct {
 } LinkedList;
 
 // Function to initialize an empty linked list
-void initializeList(LinkedList* list) {
+void initialize(LinkedList* list) {
     list->front = NULL;
     list->back = NULL;
 }

@@ -29,7 +29,7 @@ typedef struct TCB
     // An+d more ...
 
     // YOUR CODE HERE
-    int thread_id;
+    worker_t thread_id;
     enum State thread_status;
     ucontext_t context;
     int priority;

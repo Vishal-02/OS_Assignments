@@ -31,10 +31,9 @@ int yielded = 0; // for false
 
 
 //maintaining a list of thread that requires lock
-LinkedList *block_list;
-initialize(block_list); 
+LinkedList *block_list; 
 struct sigaction s;
-struct itimerval timer;
+// struct itimerval timer;
 struct timeval t;
 unsigned long start_time[MAXTHREADS];
 unsigned long schedule_time[MAXTHREADS];
@@ -47,6 +46,9 @@ ucontext_t current_context;
 
 // function declarations
 static void sched_rr(LinkedList *run_queue);
+static void sched_mlfq(LinkedList *run_queue);
+static void schedule();
+void remove_from_block_list();
 
 void init() {
     did_init = 1;
@@ -75,6 +77,7 @@ void init() {
     MLFQ_level_3 = (LinkedList *)malloc(sizeof(LinkedList));
     terminated_threads = (LinkedList *)malloc(sizeof(LinkedList));
     run_queue = (LinkedList *)malloc(sizeof(LinkedList));
+    block_list = (LinkedList *)malloc(sizeof(LinkedList));
 
     initialize(round_robin);
     initialize(MLFQ_level_1);
@@ -82,9 +85,10 @@ void init() {
     initialize(MLFQ_level_3);
     initialize(run_queue);
     initialize(terminated_threads);
+    initialize(block_list);
     
 
-    makecontext(&scheduler_context, &schedule);
+    makecontext(&scheduler_context, &schedule, 0);
 }
 
 /* create a new thread */
@@ -115,14 +119,14 @@ int worker_create(worker_t *thread, pthread_attr_t *attr,
         return -1;
     }
 
-    if (getcontext(&control_block) == -1) {
+    if (getcontext(&control_block->context) == -1) {
         perror("getcontext failed");
         free(control_block);
         free(stack);
         return -1;
     }
 
-    control_block->thread_id = thread;
+    control_block->thread_id = *thread;
     control_block->context = current_context;
     control_block->priority = 4;
     control_block->context.uc_link=NULL;
@@ -134,7 +138,7 @@ int worker_create(worker_t *thread, pthread_attr_t *attr,
     control_block->thread_status = WAITING;
 
     // and now we add the thread to the queue
-    insert(round_robin, thread, control_block);
+    insert(round_robin, *thread, control_block);
     setcontext(&scheduler_context);
     
     return 0;
@@ -214,7 +218,7 @@ int worker_mutex_init(worker_mutex_t *mutex,
     //block_list = (LinkedList *)malloc(sizeof(LinkedList));
     if(mutex == NULL) return -1;
     mutex->locked=0;
-    mutex->current_thread=NULL;
+    mutex->current_thread=0;
 
     return 0;
 
@@ -234,10 +238,10 @@ int worker_mutex_lock(worker_mutex_t *mutex)
         currently_running->thread_status = BLOCKED;
         //insert(block_list,currently_running);
         currently_running_blocked = 1;
-        swapcontext(&(currently_running->value),&scheduler_context);
+        swapcontext(&(currently_running->context),&scheduler_context);
     }
 
-    mutex->current_thread = currently_running;
+    mutex->current_thread = currently_running->thread_id;
     mutex->locked = 1;
     return 0;
 
@@ -249,7 +253,7 @@ int worker_mutex_unlock(worker_mutex_t *mutex)
     // - release mutex and make it available again.
     // - put one or more threads in block list to run queue
     // so that they could compete for mutex later.
-    mutex->current_thread = NULL;
+    mutex->current_thread = 0;
     mutex->locked = 0;
     //to move threads from blocked list to run queue
     remove_from_block_list();
@@ -297,7 +301,7 @@ static void sched_rr(LinkedList *run_queue)
     if(currently_running_blocked!=1 && currently_running!=NULL)
     {
         currently_running->thread_status = READY;
-        insert(currently_running, currently_running->thread_id, round_robin);
+        insert(round_robin, currently_running->thread_id, currently_running);
 
     }
 
@@ -319,15 +323,15 @@ static void sched_rr(LinkedList *run_queue)
         currently_running_blocked=0;
         free(temporary);
 
-        timer.it_value.tv_usec = QUANTUM;
-        timer.it_value.tv_sec = 0;
-        setitimer(ITIMER_PROF, &timer,NULL);
+        // timer.it_value.tv_usec = QUANTUM;
+        // timer.it_value.tv_sec = 0;
+        // setitimer(ITIMER_PROF, &timer,NULL);
 
-        gettimeofday(&t,NULL);
-        unsigned long time = 1000000 * t.t_sec + t.t_usec;
-        schedule_time[currently_running->thread_id] = time;
+        // gettimeofday(&t,NULL);
+        // unsigned long time = 1000000 * t.t_sec + t.t_usec;
+        // schedule_time[currently_running->thread_id] = time;
 
-        setcontext(&(currently_running->value));
+        setcontext(&(currently_running->context));
 
 
     }
@@ -342,7 +346,7 @@ static void sched_mlfq(LinkedList *run_queue)
 
     if(currently_running_blocked != 1 && currently_running != NULL) {
         currently_running->thread_status = READY;
-        insert(currently_running, currently_running->thread_id, round_robin);
+        insert(round_robin, currently_running->thread_id, currently_running);
 
         int priority = currently_running->priority;
 
@@ -379,14 +383,14 @@ static void sched_mlfq(LinkedList *run_queue)
 
     }
 
-    if (RR->head != NULL){
-		sched_rr(RR);
-	}else if (mlfq_level_3->head != NULL){
-		sched_rr(mlfq_level_3);
-	}else if (mlfq_level_2->head != NULL){
-		sched_rr(mlfq_level_2);
-	}else if (mlfq_level_1->head != NULL){
-		sched_rr(mlfq_level_1);
+    if (round_robin->front != NULL){
+		sched_rr(round_robin);
+	}else if (MLFQ_level_3->front != NULL){
+		sched_rr(MLFQ_level_3);
+	}else if (MLFQ_level_2->front != NULL){
+		sched_rr(MLFQ_level_2);
+	}else if (MLFQ_level_1->front != NULL){
+		sched_rr(MLFQ_level_1);
 	}
 
     return;
