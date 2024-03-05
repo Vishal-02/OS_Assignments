@@ -29,12 +29,6 @@ LinkedList* terminated_threads;
 int yielded = 0; // for false
 
 
-initialize(round_robin);
-initialize(MLFQ_level_1);
-initialize(MLFQ_level_2);
-initialize(MLFQ_level_3);
-initialize(run_queue);
-initialize(terminated_threads);
 
 //maintaining a list of thread that requires lock
 LinkedList *block_list;
@@ -75,10 +69,20 @@ void init() {
 	scheduler_context.uc_stack.ss_size=STACK_SIZE;
 	scheduler_context.uc_stack.ss_flags=0;
 
-    {
-        /* data */
-    };
-    )
+    round_robin = (LinkedList *)malloc(sizeof(LinkedList));
+    MLFQ_level_1 = (LinkedList *)malloc(sizeof(LinkedList));
+    MLFQ_level_2 = (LinkedList *)malloc(sizeof(LinkedList));
+    MLFQ_level_3 = (LinkedList *)malloc(sizeof(LinkedList));
+    terminated_threads = (LinkedList *)malloc(sizeof(LinkedList));
+    run_queue = (LinkedList *)malloc(sizeof(LinkedList));
+
+    initialize(round_robin);
+    initialize(MLFQ_level_1);
+    initialize(MLFQ_level_2);
+    initialize(MLFQ_level_3);
+    initialize(run_queue);
+    initialize(terminated_threads);
+    
 
     makecontext(&scheduler_context, &schedule);
 }
