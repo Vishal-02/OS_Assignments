@@ -10,7 +10,7 @@ thread-worker.a: thread-worker.o
 	$(RANLIB) libthread-worker.a
 
 
-thread-worker.o: thread-worker.h thread_worker_types.h mutex_types.h
+thread-worker.o: thread-worker.h thread_worker_types.h mutex_types.h linked_list.h
 
 ifeq ($(SCHED), RR)
 	$(CC) $(CFLAGS) -DRR thread-worker.c

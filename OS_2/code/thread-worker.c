@@ -9,6 +9,7 @@
 
 #include "thread-worker.h"
 #include "thread_worker_types.h"
+#include "linked_list.h"
 
 #define STACK_SIZE 16 * 1024
 #define QUANTUM 10 * 1000
@@ -19,16 +20,26 @@
 int init_scheduler_done = 0;
 int currently_running_blocked = 0;
 tcb* currently_running = NULL;
-LinkedList *RR;
-LinkedList *run_queue;
-LinkedList *terminated_threads;
-initializeList(RR);
-initializeList(run_queue);
-initializeList(terminated_threads);
+LinkedList* round_robin;
+LinkedList* MLFQ_level_1;
+LinkedList* MLFQ_level_2;
+LinkedList* MLFQ_level_3;
+LinkedList* run_queue;
+LinkedList* terminated_threads;
+int yielded = 0; // for false
+
+
+initialize(round_robin);
+initialize(MLFQ_level_1);
+initialize(MLFQ_level_2);
+initialize(MLFQ_level_3);
+initialize(run_queue);
+initialize(terminated_threads);
 
 //maintaining a list of thread that requires lock
 LinkedList *block_list;
-initializeList(block_list); 
+initialize(block_list); 
+struct sigaction s;
 struct itimerval timer;
 struct timeval t;
 unsigned long start_time[MAXTHREADS];
@@ -37,6 +48,9 @@ unsigned long completion_time[MAXTHREADS];
 long int response_time = 0;
 long int turearound_time = 0;
 ucontext_t scheduler_context;
+
+// function declarations
+static void sched_rr(LinkedList *run_queue);
 
 
 /* create a new thread */
@@ -107,6 +121,7 @@ int worker_yield()
 
     // swaps the context, we use setcontext because we already saved context of the previous thread
     setcontext(&temp->context);
+    yielded = 1;
 
     // the new thread is now the running thread, so we change the status
     temp->thread_status = RUNNING;
@@ -150,7 +165,9 @@ int worker_join(worker_t thread, void **value_ptr)
     // - wait for a specific thread to terminate
     // let's get the thread
     tcb* the_thread = findNode(run_queue, thread)->control;
-    while (the_thread->thread_status != TERMINATED);
+    while (the_thread->thread_status != TERMINATED) {
+        printf("waiting for thread to terminate in the worker join while loop...");
+    }
 
     // - if value_ptr is provided, retrieve return value from joining thread
     the_thread = findNode(terminated_threads, thread)->control->value;
@@ -239,10 +256,11 @@ static void schedule()
 // - schedule policy
 #ifndef MLFQ
     // Choose RR
+    sched_rr(run_queue);
     
 #else
     // Choose MLFQ
-    
+    sched_mlfq();
 #endif
 }
 
@@ -253,7 +271,7 @@ static void sched_rr(LinkedList *run_queue)
     if(currently_running_blocked!=1 && currently_running!=NULL)
     {
         currently_running->thread_status = READY;
-        insert(currently_running, currently_running->thread_id, RR);
+        insert(currently_running, currently_running->thread_id, round_robin);
 
     }
 
@@ -266,6 +284,7 @@ static void sched_rr(LinkedList *run_queue)
         {
             run_queue->back = NULL;
         }
+
         temporary->next= NULL;
 
         currently_running=temporary->control;
@@ -274,13 +293,13 @@ static void sched_rr(LinkedList *run_queue)
         currently_running_blocked=0;
         free(temporary);
 
-        // timer.it_value.tv_usec = QUANTUM;
-        // timer.it_value.tv_sec = 0;
-        // setitimer(ITIMER_PROF, &timer,NULL);
+        timer.it_value.tv_usec = QUANTUM;
+        timer.it_value.tv_sec = 0;
+        setitimer(ITIMER_PROF, &timer,NULL);
 
-        // gettimeofday(&t,NULL);
-        // unsigned long time = 1000000 * t.t_sec + t.t_usec;
-        // schedule_time[currently_running->thread_id] = time;
+        gettimeofday(&t,NULL);
+        unsigned long time = 1000000 * t.t_sec + t.t_usec;
+        schedule_time[currently_running->thread_id] = time;
 
         setcontext(&(currently_running->value));
 
@@ -290,11 +309,51 @@ static void sched_rr(LinkedList *run_queue)
 }
 
 /* Preemptive MLFQ scheduling algorithm */
-static void sched_mlfq()
+static void sched_mlfq(LinkedList *run_queue)
 {
     // - your own implementation of MLFQ
     // (feel free to modify arguments and return types)
 
+    if(currently_running_blocked != 1 && currently_running != NULL) {
+        currently_running->thread_status = READY;
+        insert(currently_running, currently_running->thread_id, round_robin);
+
+        int priority = currently_running->priority;
+
+        // change the status to ready
+        currently_running->thread_status = READY;
+
+        // should we have a check for whether or not the thread yielded?
+        if (yielded == 1) {
+            if (priority == 4) {
+                insert(round_robin, currently_running->thread_id, currently_running);
+            } else if (priority == 3) {
+                insert(MLFQ_level_3, currently_running->thread_id, currently_running);
+            } else if (priority == 2) {
+                insert(MLFQ_level_2, currently_running->thread_id, currently_running);
+            } else {
+                insert(MLFQ_level_1, currently_running->thread_id, currently_running);
+            }
+
+            yielded = 0;
+        } else {
+            if (priority == 4) {
+                currently_running->priority = 3;
+                insert(MLFQ_level_3, currently_running->thread_id, currently_running);
+            } else if (priority == 3) {
+                currently_running->priority = 2;
+                insert(MLFQ_level_2, currently_running->thread_id, currently_running);
+            } else if (priority == 2) {
+                currently_running->priority = 1;
+                insert(MLFQ_level_1, currently_running->thread_id, currently_running);
+            } else {
+                insert(MLFQ_level_1, currently_running->thread_id, currently_running);
+            }
+        }
+
+    }
+
+    return;
 }
 
 void unblock_threads() {
@@ -309,7 +368,7 @@ void unblock_threads() {
 		cur->control->thread_status  = READY;
 		#ifndef MLFQ
 			// Add to the RR queue
-			insert(RR,cur->data,cur->control);
+			insert(round_robin,cur->data,cur->control);
 		#else
 			// int prior = cur->thrd->tcb_block-> priority;
 					
@@ -341,3 +400,4 @@ void unblock_threads() {
 // Feel free to add any other functions you need.
 // You can also create separate files for helper functions, structures, etc.
 // But make sure that the Makefile is updated to account for the same.
+
