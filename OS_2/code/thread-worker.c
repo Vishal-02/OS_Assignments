@@ -33,8 +33,7 @@ int yielded = 0; // for false
 //maintaining a list of thread that requires lock
 LinkedList *block_list; 
 struct sigaction s;
-// struct itimerval timer;
-struct timeval t;
+struct itimerval timer;
 unsigned long start_time[MAXTHREADS];
 unsigned long schedule_time[MAXTHREADS];
 unsigned long completion_time[MAXTHREADS];
@@ -49,6 +48,7 @@ static void sched_rr(LinkedList *run_queue);
 static void sched_mlfq(LinkedList *run_queue);
 static void schedule();
 void remove_from_block_list();
+void handle_time(int num);
 
 void init() {
     did_init = 1;
@@ -64,6 +64,10 @@ void init() {
 		perror("Failed to allocate stack");
 		exit(1);
 	}
+
+    memset(&s,0,sizeof(s));
+    s.sa_handler = &handle_time;
+    sigaction(SIGPROF,&s,NULL);
 	
 	/* Setup context that we are going to use */
 	scheduler_context.uc_link=NULL;
@@ -159,6 +163,8 @@ int worker_yield()
 
     // - switch from thread context to scheduler context
     // gets the next thread that's in the queue
+    timer.it_value.tv_usec =0;
+    timer.it_value.tv_sec =0;
     swapcontext(&currently_running->context, &scheduler_context);
 
     return 0;
@@ -178,7 +184,10 @@ void worker_exit(void *value_ptr)
     currently_running->thread_status = TERMINATED;
     insert(terminated_threads, currently_running->thread_id, currently_running);
 
+
     // set the context for the new thread
+    timer.it_value.tv_usec =0;
+    timer.it_value.tv_sec =0;
     setcontext(&scheduler_context);
 
     return;
@@ -323,13 +332,10 @@ static void sched_rr(LinkedList *run_queue)
         currently_running_blocked=0;
         free(temporary);
 
-        // timer.it_value.tv_usec = QUANTUM;
-        // timer.it_value.tv_sec = 0;
-        // setitimer(ITIMER_PROF, &timer,NULL);
+        timer.it_value.tv_usec = QUANTUM;
+        timer.it_value.tv_sec = 0;
+        setitimer(ITIMER_PROF, &timer,NULL);
 
-        // gettimeofday(&t,NULL);
-        // unsigned long time = 1000000 * t.t_sec + t.t_usec;
-        // schedule_time[currently_running->thread_id] = time;
 
         setcontext(&(currently_running->context));
 
@@ -396,6 +402,11 @@ static void sched_mlfq(LinkedList *run_queue)
     return;
 }
 
+void handle_time(int num)
+{
+    swapcontext(&(currently_running->context),&scheduler_context);
+}
+
 void remove_from_block_list() {
 
 	//Remove each thread from blocked list and put it on run queue.
@@ -442,4 +453,3 @@ void remove_from_block_list() {
 // Feel free to add any other functions you need.
 // You can also create separate files for helper functions, structures, etc.
 // But make sure that the Makefile is updated to account for the same.
-
