@@ -13,15 +13,30 @@
 #define STACK_SIZE 16 * 1024
 #define QUANTUM 10 * 1000
 
+#define MAXTHREADS 200
 
 // INITIALIZE ALL YOUR OTHER VARIABLES HERE
 int init_scheduler_done = 0;
+int currently_running_blocked = 0;
 tcb* currently_running = NULL;
-LinkedList* run_queue;
-LinkedList* terminated_threads;
+LinkedList *RR;
+LinkedList *run_queue;
+LinkedList *terminated_threads;
+initializeList(RR);
 initializeList(run_queue);
 initializeList(terminated_threads);
 
+//maintaining a list of thread that requires lock
+LinkedList *block_list;
+initializeList(block_list); 
+struct itimerval timer;
+struct timeval t;
+unsigned long start_time[MAXTHREADS];
+unsigned long schedule_time[MAXTHREADS];
+unsigned long completion_time[MAXTHREADS];
+long int response_time = 0;
+long int turearound_time = 0;
+ucontext_t scheduler_context;
 
 
 /* create a new thread */
@@ -152,6 +167,12 @@ int worker_mutex_init(worker_mutex_t *mutex,
                       const pthread_mutexattr_t *mutexattr)
 {
     //- initialize data structures for this mutex
+
+    //block_list = (LinkedList *)malloc(sizeof(LinkedList));
+    if(mutex == NULL) return -1;
+    mutex->locked=0;
+    mutex->current_thread=NULL;
+
     return 0;
 
 };
@@ -164,6 +185,17 @@ int worker_mutex_lock(worker_mutex_t *mutex)
     // - if the mutex is acquired successfully, enter the critical section
     // - if acquiring mutex fails, push current thread into block list and
     // context switch to the scheduler thread
+
+    if(__atomic_test_and_set(&(mutex->locked),1) == 0)
+    {
+        currently_running->thread_status = BLOCKED;
+        //insert(block_list,currently_running);
+        currently_running_blocked = 1;
+        swapcontext(&(currently_running->value),&scheduler_context);
+    }
+
+    mutex->current_thread = currently_running;
+    mutex->locked = 1;
     return 0;
 
 };
@@ -174,6 +206,11 @@ int worker_mutex_unlock(worker_mutex_t *mutex)
     // - release mutex and make it available again.
     // - put one or more threads in block list to run queue
     // so that they could compete for mutex later.
+    mutex->current_thread = NULL;
+    mutex->locked = 0;
+    //to move threads from blocked list to run queue
+    unblock_threads();
+
 
     return 0;
 };
@@ -183,6 +220,9 @@ int worker_mutex_destroy(worker_mutex_t *mutex)
 {
     // - make sure mutex is not being used
     // - de-allocate dynamic memory created in worker_mutex_init
+    if(mutex == NULL) return -1;
+
+    //free(mutex);
 
     return 0;
 };
@@ -206,10 +246,46 @@ static void schedule()
 #endif
 }
 
-static void sched_rr()
+static void sched_rr(LinkedList *run_queue)
 {
     // - your own implementation of RR
     // (feel free to modify arguments and return types)
+    if(currently_running_blocked!=1 && currently_running!=NULL)
+    {
+        currently_running->thread_status = READY;
+        insert(currently_running, currently_running->thread_id, RR);
+
+    }
+
+    if(run_queue->front!=NULL)
+    {
+        Node *temporary = run_queue->front;
+        run_queue->front = (run_queue->front)->next;
+
+        if(run_queue->front == NULL)
+        {
+            run_queue->back = NULL;
+        }
+        temporary->next= NULL;
+
+        currently_running=temporary->control;
+        currently_running->thread_status=RUNNING;
+
+        currently_running_blocked=0;
+        free(temporary);
+
+        // timer.it_value.tv_usec = QUANTUM;
+        // timer.it_value.tv_sec = 0;
+        // setitimer(ITIMER_PROF, &timer,NULL);
+
+        // gettimeofday(&t,NULL);
+        // unsigned long time = 1000000 * t.t_sec + t.t_usec;
+        // schedule_time[currently_running->thread_id] = time;
+
+        setcontext(&(currently_running->value));
+
+
+    }
 
 }
 
@@ -221,6 +297,47 @@ static void sched_mlfq()
 
 }
 
+void unblock_threads() {
+
+	//Remove each thread from blocked list and put it on run queue.
+	//Free the node in blocked list as well
+	Node *cur = block_list->front;
+	Node *prev = block_list->back;
+	
+	while (cur != NULL)
+	{
+		cur->control->thread_status  = READY;
+		#ifndef MLFQ
+			// Add to the RR queue
+			insert(RR,cur->data,cur->control);
+		#else
+			// int prior = cur->thrd->tcb_block-> priority;
+					
+			// if(prior == 1){
+			// 	insert_queue(cur->thrd, mlfq_level_1);
+			// }else if (prior == 2){
+			// 	insert_queue(cur->thrd, mlfq_level_2);
+			// }else if (prior == 3){
+			// 	insert_queue(cur->thrd, mlfq_level_3);
+			// }else{
+			// 	insert_queue(cur->thrd, RR);
+			// }	
+
+		#endif
+
+		cur = cur->next;
+		// Free the node as the node that holds the pointer to thread is no longer
+		// required in blocked list.
+		free(prev);
+		//Move the previosu pointer
+		prev = cur;
+	}
+
+	// Make blocked list empty as all nodes are removed
+	block_list->front = NULL;
+	block_list->back = NULL;
+
+}
 // Feel free to add any other functions you need.
 // You can also create separate files for helper functions, structures, etc.
 // But make sure that the Makefile is updated to account for the same.

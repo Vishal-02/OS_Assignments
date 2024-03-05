@@ -9,6 +9,11 @@ typedef struct worker_mutex_t
     /* add something here */
 
     // YOUR CODE HERE
+
+    int locked;
+
+    worker_t current_thread;
+    
 } worker_mutex_t;
 
 #endif
