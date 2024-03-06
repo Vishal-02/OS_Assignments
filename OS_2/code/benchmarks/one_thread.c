@@ -7,6 +7,7 @@ void dummy_work(void *arg)
     int i = 0;
     int j = 0;
     int n = *((int *)arg);
+    printf("something\n");
 
     for (i = 0; i < 20; i++)
     {
@@ -19,6 +20,7 @@ void dummy_work(void *arg)
     printf("Thread %d exiting\n", n);
     worker_exit(NULL);
 }
+
 
 int main(int argc, char **argv)
 {

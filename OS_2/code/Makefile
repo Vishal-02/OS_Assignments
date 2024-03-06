@@ -13,9 +13,9 @@ thread-worker.a: thread-worker.o
 thread-worker.o: thread-worker.h thread_worker_types.h mutex_types.h linked_list.h
 
 ifeq ($(SCHED), RR)
-	$(CC) $(CFLAGS) -DRR thread-worker.c
+	$(CC) $(CFLAGS) -DRR thread-worker.c -o $@
 else ifeq ($(SCHED), MLFQ)
-	$(CC) $(CFLAGS) -DMLFQ thread-worker.c
+	$(CC) $(CFLAGS) -DMLFQ thread-worker.c -o $@
 else
 	echo "no such scheduling algorithm"
 endif

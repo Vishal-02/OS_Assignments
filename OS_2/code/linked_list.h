@@ -28,13 +28,13 @@ int isempty(LinkedList* list) {
 // Function to find a node with a certain value
 Node* findNode(LinkedList* list, worker_t value) {
     if (isempty(list)) {
-        fprintf(stderr, "Cannot search an empty list\n");
-        exit(EXIT_FAILURE);
+        // fprintf(stderr, "Cannot search an empty list\n");
+        return NULL;
     }
 
     Node* current = list->front;
     while (current != NULL) {
-        if (current->control->thread_id == value) {
+        if (current->data == value) {
             return current; // Node found
         }
         current = current->next;
@@ -95,7 +95,7 @@ void removeNode(LinkedList* list, worker_t value) {
     Node* prev = NULL;
 
     // Traverse the list to find the node with the specified value
-    while (current != NULL && current->control->thread_id != value) {
+    while (current != NULL && current->data != value) {
         prev = current;
         current = current->next;
     }

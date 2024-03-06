@@ -5,13 +5,14 @@
  */
 // username of iLab:
 // iLab Server:
-
+// Your code looks good :)
 
 #include "thread-worker.h"
 #include "thread_worker_types.h"
 #include "linked_list.h"
+#include <stdio.h>
 
-#define STACK_SIZE 16 * 1024
+#define STACK_SIZE 8 * 1024
 #define QUANTUM 10 * 1000
 
 #define MAXTHREADS 200
@@ -31,6 +32,7 @@ int yielded = 0; // for false
 
 
 //maintaining a list of thread that requires lock
+worker_t thread_id = 0;
 LinkedList *block_list; 
 struct sigaction s;
 struct itimerval timer;
@@ -40,8 +42,10 @@ unsigned long completion_time[MAXTHREADS];
 long int response_time = 0;
 long int turearound_time = 0;
 int did_init = 0;
+int s_begin = 0;
+int created_main_thread = 0;
 ucontext_t scheduler_context;
-ucontext_t current_context;
+ucontext_t start_context;
 
 // function declarations
 static void sched_rr(LinkedList *run_queue);
@@ -67,13 +71,15 @@ void init() {
 
     memset(&s,0,sizeof(s));
     s.sa_handler = &handle_time;
-    sigaction(SIGPROF,&s,NULL);
+    sigaction(SIGPROF,&s, NULL);
+    // timer.it_value.tv_usec = QUANTUM;
+    // timer.it_value.tv_sec = 0;
 	
 	/* Setup context that we are going to use */
 	scheduler_context.uc_link=NULL;
 	scheduler_context.uc_stack.ss_sp=stack;
 	scheduler_context.uc_stack.ss_size=STACK_SIZE;
-	scheduler_context.uc_stack.ss_flags=0;
+	scheduler_context.uc_stack.ss_flags = 0;
 
     round_robin = (LinkedList *)malloc(sizeof(LinkedList));
     MLFQ_level_1 = (LinkedList *)malloc(sizeof(LinkedList));
@@ -92,7 +98,7 @@ void init() {
     initialize(block_list);
     
 
-    makecontext(&scheduler_context, &schedule, 0);
+    // makecontext(&scheduler_context, (void(*)(void))schedule, 0);
 }
 
 /* create a new thread */
@@ -104,18 +110,62 @@ int worker_create(worker_t *thread, pthread_attr_t *attr,
     // - allocate space of stack for this thread to run
     // after everything is set, push this thread into run queue and
     // - make it ready for the execution.
+    fflush(stdout);
     if (did_init == 0) {
         init();
+        did_init = 1;
     }
 
-    tcb *control_block = malloc(sizeof(tcb));
-    getcontext(&current_context);
+    // we create a main thread and add that to the scheduler
+    if (s_begin == 0) {
+        if (getcontext(&scheduler_context) == -1) {
+            perror("Scheduler context not initialized\n");
+            return -1;
+        }
 
+        scheduler_context.uc_stack.ss_sp = malloc(STACK_SIZE);
+        scheduler_context.uc_stack.ss_size = STACK_SIZE;
+        makecontext(&scheduler_context, (void(*)(void))schedule, 0);
+
+        // benchmark thread
+        getcontext(&start_context);
+        if(!created_main_thread) {
+            start_context.uc_stack.ss_sp = malloc(STACK_SIZE);
+            start_context.uc_stack.ss_size = STACK_SIZE;
+            tcb* parent = (tcb*)malloc(sizeof(tcb));
+            parent->context = start_context;
+            parent->thread_id = thread_id++;
+
+            insert(round_robin, 0, parent);
+            // printf("inserted the parent thread, going to display values...\n");
+            // display(round_robin);
+            created_main_thread = 1;
+            s_begin = 1;
+            swapcontext(&start_context, &scheduler_context);
+        }
+    }
+
+    // the main 
+    // printf("going to make the worker thread...\n");
+    tcb* control_block = (tcb*) malloc(sizeof(tcb));
     if (control_block == NULL) {
-        perror("Failed to allocate memory to tcb");
+        fprintf(stderr, "Failed to allocate memory to tcb");
+        return -1;
+    } 
+
+    *thread = thread_id++;
+    control_block->thread_id = *thread;
+    control_block->thread_status = READY;
+    control_block->priority = 4;
+
+    // now we need to create some context for this thread
+    ucontext_t context_for_new_thread;
+    if (getcontext(&control_block->context) == -1) {
+        perror("failed to get context for new thread");
         return -1;
     }
 
+    // now we need to allocate a stack for it
     void *stack = malloc(STACK_SIZE);
     if (stack == NULL) {
         perror("Failed to allocate memory for the stack");
@@ -123,28 +173,24 @@ int worker_create(worker_t *thread, pthread_attr_t *attr,
         return -1;
     }
 
-    if (getcontext(&control_block->context) == -1) {
-        perror("getcontext failed");
-        free(control_block);
-        free(stack);
-        return -1;
-    }
-
-    control_block->thread_id = *thread;
-    control_block->context = current_context;
-    control_block->priority = 4;
     control_block->context.uc_link=NULL;
 	control_block->context.uc_stack.ss_sp=stack;
 	control_block->context.uc_stack.ss_size=STACK_SIZE;
 	control_block->context.uc_stack.ss_flags=0;
+    // control_block->context = context_for_new_thread;
 
-    makecontext(&control_block->context, (void*) function, 1, arg);
-    control_block->thread_status = WAITING;
+    if (arg == NULL) {
+        // this means that there are no arguments, so we don't need to pass 
+        // any to the makecontext function
+        makecontext(&control_block->context, (void*)function, 0);
+    } else makecontext(&control_block->context, (void*)function, 1, arg);
+
 
     // and now we add the thread to the queue
     insert(round_robin, *thread, control_block);
-    setcontext(&scheduler_context);
-    
+    // display(round_robin);
+    // scheduler will get called by itself when the quantum is over
+    // setcontext(&scheduler_context);
     return 0;
 }
 
@@ -155,19 +201,10 @@ int worker_yield()
     // - change worker thread's state from Running to Ready
     currently_running->thread_status = READY;
 
-    // - save context of this thread to its thread control block
-    if (getcontext(&currently_running->context) == -1) {
-        perror("Failed to save context of currently running thread");
-        return -1;
-    }
-
     // - switch from thread context to scheduler context
-    // gets the next thread that's in the queue
-    timer.it_value.tv_usec =0;
-    timer.it_value.tv_sec =0;
-    swapcontext(&currently_running->context, &scheduler_context);
+    // gets the next thread that's in the queue\
 
-    return 0;
+    swapcontext(&currently_running->context, &scheduler_context);
 
 };
 
@@ -176,44 +213,51 @@ void worker_exit(void *value_ptr)
 {
     // - if value_ptr is provided, save return value
     // - de-allocate any dynamic memory created when starting this thread (could be done here or elsewhere)
-    if (value_ptr != NULL) {
-        currently_running->value = value_ptr;
-    }
+	if (value_ptr != NULL)
+		currently_running->value = value_ptr;
 
-    free(currently_running->context.uc_stack.ss_sp);
-    currently_running->thread_status = TERMINATED;
-    insert(terminated_threads, currently_running->thread_id, currently_running);
+	// free(currently_running->context.uc_stack.ss_sp);
+	currently_running->thread_status = TERMINATED;
+	insert(terminated_threads, currently_running->thread_id, currently_running);
+    // printf("we're in the exit function\n");
+	// display(terminated_threads);
+
+	// timer.it_value.tv_usec = QUANTUM;
+    // timer.it_value.tv_sec = 0;
+
+	// if (value_ptr != NULL) {
+    //     currently_running->value = value_ptr;
+    // }
+
+    // free(currently_running->context.uc_stack.ss_sp);
+    // currently_running->thread_status = TERMINATED;
+    // insert(terminated_threads, currently_running->thread_id, currently_running);
+    // display(terminated_threads);
 
 
-    // set the context for the new thread
-    timer.it_value.tv_usec =0;
-    timer.it_value.tv_sec =0;
+    // // set the context for the new thread
     setcontext(&scheduler_context);
 
-    return;
 }
 
 /* Wait for thread termination */
 int worker_join(worker_t thread, void **value_ptr)
 {
     // - wait for a specific thread to terminate
-    // let's get the thread
-    tcb* the_thread = NULL;
-    while (the_thread == NULL) {
-        the_thread = findNode(terminated_threads, thread)->control;
-        printf("waiting for thread to terminate in the worker join while loop...");
+
+    Node* node_to_wait_for = findNode(terminated_threads, thread);
+    while (node_to_wait_for == NULL) {
+        node_to_wait_for = findNode(terminated_threads, thread);
+		// printf("waiting for thread to terminate in the worker_join while loop\n");
     }
 
-    // - if value_ptr is provided, retrieve return value from joining thread
-    void* the_thread_value = findNode(terminated_threads, thread)->control->value;
-    if (value_ptr != NULL) {
-        *value_ptr = the_thread_value;
-    }
+	tcb* the_thread = node_to_wait_for->control;
+	if (value_ptr != NULL)
+		*value_ptr = the_thread->value;
 
-    // - de-allocate any dynamic memory created by the joining thread
-    free(findNode(terminated_threads, thread));
-    setcontext(&scheduler_context);
-
+	free(the_thread);
+    free(node_to_wait_for);
+	
     return 0;
 
 };
@@ -245,9 +289,9 @@ int worker_mutex_lock(worker_mutex_t *mutex)
     if(__atomic_test_and_set(&(mutex->locked),1) == 0)
     {
         currently_running->thread_status = BLOCKED;
-        //insert(block_list,currently_running);
+        insert(block_list,currently_running->thread_id,currently_running);
         currently_running_blocked = 1;
-        swapcontext(&(currently_running->context),&scheduler_context);
+        swapcontext(&(currently_running->context), &scheduler_context);
     }
 
     mutex->current_thread = currently_running->thread_id;
@@ -277,8 +321,8 @@ int worker_mutex_destroy(worker_mutex_t *mutex)
     // - make sure mutex is not being used
     // - de-allocate dynamic memory created in worker_mutex_init
     if(mutex == NULL) return -1;
-
-    //free(mutex);
+    if(mutex->locked) return -1;
+    // free(mutex);
 
     return 0;
 };
@@ -295,11 +339,11 @@ static void schedule()
 // - schedule policy
 #ifndef MLFQ
     // Choose RR
-    sched_rr(run_queue);
+    sched_rr(round_robin);
     
 #else
     // Choose MLFQ
-    sched_mlfq();
+    sched_mlfq(round_robin);
 #endif
 }
 
@@ -313,6 +357,9 @@ static void sched_rr(LinkedList *run_queue)
         insert(round_robin, currently_running->thread_id, currently_running);
 
     }
+
+    // printf("in the scheduler...\n");
+    // display(round_robin);
 
     if(run_queue->front!=NULL)
     {
@@ -336,11 +383,13 @@ static void sched_rr(LinkedList *run_queue)
         timer.it_value.tv_sec = 0;
         setitimer(ITIMER_PROF, &timer,NULL);
 
+        // printf("ran the if condition...\n");
+        // display(round_robin);
+        // printf("currently running id: %d\n", currently_running->thread_id);
 
         setcontext(&(currently_running->context));
-
-
     }
+
 
 }
 
@@ -389,6 +438,8 @@ static void sched_mlfq(LinkedList *run_queue)
 
     }
 
+    // take care of calling the scheduler for each queue after this
+
     if (round_robin->front != NULL){
 		sched_rr(round_robin);
 	}else if (MLFQ_level_3->front != NULL){
@@ -419,7 +470,7 @@ void remove_from_block_list() {
 		cur->control->thread_status  = READY;
 		#ifndef MLFQ
 			// Add to the RR queue
-			insert(round_robin,cur->data,cur->control);
+			insert(round_robin,cur->control->thread_id,cur->control);
             
 		#else
 			int priority = cur->control->priority;
