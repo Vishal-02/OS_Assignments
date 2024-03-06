@@ -11,6 +11,7 @@ typedef struct worker_mutex_t
     // YOUR CODE HERE
 
     int locked;
+    // int locked_1;
 
     worker_t current_thread;
     

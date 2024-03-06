@@ -15,7 +15,7 @@ void dummy_work_short(void *arg)
 		for (j = 0; j < 80000; j++)
 		{
 		}
-		printf("Thread %d running\n", n);
+		// printf("Thread %d running\n", n);
 		worker_yield();
 	}
 
@@ -34,7 +34,7 @@ void dummy_work_long(void *arg)
 		for (j = 0; j < 30000000; j++)
 		{
 		}
-		printf("Thread %d running long\n", n);
+		// printf("Thread %d running long\n", n);
 	}
 
 	printf("Thread %d exiting\n", n);

@@ -21,16 +21,16 @@ void dummy_work(void *arg)
 		{
 		}
 
-		printf("Thread %d trying to lock mutex\n", n);
+		// printf("Thread %d trying to lock mutex\n", n);
 		worker_mutex_lock(&mutex);
-		printf("Thread %d acquired mutex\n", n);
+		// printf("Thread %d acquired mutex\n", n);
 
 		int orig = shared;
 		for (j = 0; j < 20000000; j++)
 		{
 		}
 		shared = orig + 1;
-		printf("Thread %d running\n", n);
+		// printf("Thread %d running\n", n);
 
 		printf("Thread %d unlocking mutex\n", n);
 		worker_mutex_unlock(&mutex);

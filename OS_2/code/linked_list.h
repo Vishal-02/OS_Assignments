@@ -40,7 +40,7 @@ Node* findNode(LinkedList* list, worker_t value) {
         current = current->next;
     }
 
-    fprintf(stderr, "Node with value %d not found\n", value);
+    // fprintf(stderr, "Node with value %d not found\n", value);
     return NULL;
 }
 
@@ -48,7 +48,6 @@ Node* findNode(LinkedList* list, worker_t value) {
 void insert(LinkedList* list, worker_t newData, tcb* control) {
     Node* newNode = (Node*)malloc(sizeof(Node));
     if (newNode == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
         exit(EXIT_FAILURE);
     }
 
@@ -70,7 +69,6 @@ void insert(LinkedList* list, worker_t newData, tcb* control) {
 // Function to delete the front element 
 void delete_first(LinkedList* list) {
     if (isempty(list)) {
-        fprintf(stderr, "Cannot delete from an empty list\n");
         return;
     }
 
@@ -87,7 +85,6 @@ void delete_first(LinkedList* list) {
 
 void removeNode(LinkedList* list, worker_t value) {
     if (isempty(list)) {
-        fprintf(stderr, "Cannot remove from an empty list\n");
         return;
     }
 
@@ -102,7 +99,6 @@ void removeNode(LinkedList* list, worker_t value) {
 
     // If the value is not found
     if (current == NULL) {
-        fprintf(stderr, "Node with value %d not found\n", value);
         return;
     }
 
@@ -123,7 +119,6 @@ void removeNode(LinkedList* list, worker_t value) {
 
 Node* getNext(LinkedList* list) {
     if (isempty(list)) {
-        perror("Run Queue is empty");
         return NULL;
     }
 
@@ -135,7 +130,6 @@ Node* getNext(LinkedList* list) {
 // Function to print out the entire list
 void display(LinkedList* list) {
     if (isempty(list)) {
-        printf("List is empty\n");
         return;
     }
 
